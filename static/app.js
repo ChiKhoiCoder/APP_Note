@@ -9,6 +9,29 @@ const api = {
   stats: ()=> fetch('/api/stats').then(r=>r.json())
 }
 
+// Chart instance
+let statsChart = null;
+
+function ensureChartLib(){
+  if(window.Chart) return Promise.resolve();
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/chart.js'; s.onload=res; s.onerror=rej; document.head.appendChild(s);
+  });
+}
+
+// Toaster
+function toast(msg, type=''){
+  let container = document.querySelector('.toasts');
+  if(!container){ container = document.createElement('div'); container.className='toasts'; document.body.appendChild(container); }
+  const el = document.createElement('div'); el.className='toast '+(type||''); el.innerHTML = `<i class='fa fa-bell'></i><div style="flex:1">${msg}</div><div style="opacity:.7;margin-left:8px;cursor:pointer" onclick="this.parentElement.remove()">✕</div>`;
+  container.appendChild(el);
+  setTimeout(()=>{ el.remove() }, 6000);
+}
+
+// debounce helper
+function debounce(fn,wait=250){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait) } }
+
 function renderTasks(tasks){
   const list = document.getElementById('list'); list.innerHTML='';
   tasks.forEach(t=>{
@@ -17,13 +40,13 @@ function renderTasks(tasks){
     left.innerHTML = `<div><input type=checkbox ${t.completed? 'checked':''} data-id='${t.id}' class='check'> <strong>${escapeHtml(t.title)}</strong></div><div class='meta'>${t.category||''} • ${t.created.slice(0,10)} ${t.deadline? '• due '+t.deadline.split('T')[0]:''}</div>`;
     const right=document.createElement('div'); right.className='right';
     const pri=document.createElement('div'); pri.className='badge '+(t.priority=='high'?'pri-high':t.priority=='low'?'pri-low':'pri-med'); pri.textContent = t.priority[0].toUpperCase()+t.priority.slice(1);
-    const del=document.createElement('button'); del.textContent='Xóa'; del.className='btn'; del.onclick=()=>{ if(confirm('Xóa?')) api.del(t.id).then(load); };
-    const edit=document.createElement('button'); edit.textContent='Sửa'; edit.className='btn'; edit.onclick=()=>{ const n=prompt('Sửa tiêu đề', t.title); if(n) { const f=new FormData(); f.append('title',n); fetch(`/api/tasks/${t.id}`,{method:'PUT',body:f}).then(()=>load()) } };
+    const del=document.createElement('button'); del.textContent='Xóa'; del.className='btn'; del.onclick=async ()=>{ if(confirm('Xóa?')){ try{ const res = await api.del(t.id); if(res && res.ok) toast('Đã xóa', 'warn'); }catch(e){ toast('Xóa thất bại') } load(); } };
+    const edit=document.createElement('button'); edit.textContent='Sửa'; edit.className='btn'; edit.onclick=async ()=>{ const n=prompt('Sửa tiêu đề', t.title); if(n) { try{ const f=new FormData(); f.append('title',n); await fetch(`/api/tasks/${t.id}`,{method:'PUT',body:f}); toast('Đã cập nhật', 'success'); }catch(e){ toast('Cập nhật thất bại') } load(); } };
     right.appendChild(pri); right.appendChild(edit); right.appendChild(del);
     el.appendChild(left); el.appendChild(right);
     list.appendChild(el);
   });
-  qsa('.check').then(arr=>arr.forEach(cb=>cb.addEventListener('change',e=>{api.toggle(e.target.dataset.id).then(load);}))); 
+  qsa('.check').then(arr=>arr.forEach(cb=>cb.addEventListener('change',e=>{ api.toggle(e.target.dataset.id).then(()=>{ toast('Đã cập nhật trạng thái'); load(); }).catch(()=>{ toast('Cập nhật thất bại') }) }))); 
 }
 
 function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -39,6 +62,15 @@ async function load(){
   document.getElementById('total').textContent = st.total;
   document.getElementById('done').textContent = st.completed;
   document.getElementById('percent').textContent = st.percent + '%';
+  // update chart
+  try{
+    await ensureChartLib();
+    const ctx = document.getElementById('statsChart').getContext('2d');
+    const done = st.completed || 0; const todo = Math.max(0, (st.total||0) - done);
+    const data = { labels: ['Hoàn thành','Chưa xong'], datasets:[{data:[done,todo], backgroundColor:['#10b981','#6366f1']}] };
+    if(statsChart){ statsChart.data = data; statsChart.update(); }
+    else{ statsChart = new Chart(ctx, {type:'doughnut', data, options:{cutout:'60%', plugins:{legend:{position:'bottom'}}}}) }
+  }catch(e){ console.warn('chart failed',e) }
   // reminders from server
   try{
     const rems = await fetch(`/api/reminders?within_days=1`).then(r=>r.json());
@@ -82,9 +114,10 @@ function daysUntil(iso){ try{ const d=new Date(iso); const diff=(d - new Date())
 
 document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('addForm').addEventListener('submit',async e=>{
-    e.preventDefault(); const f=new FormData(e.target); await api.create(f); e.target.reset(); load();
+    e.preventDefault(); const f=new FormData(e.target); try{ const res = await api.create(f); if(res && res.task) toast('Đã thêm: ' + (res.task.title||'item'), 'success'); else toast('Không thêm được'); }catch(e){ toast('Lỗi khi thêm','warn') } e.target.reset(); load();
   });
-  document.getElementById('search').addEventListener('input', load);
+  const debouncedLoad = debounce(load, 300);
+  document.getElementById('search').addEventListener('input', debouncedLoad);
   document.getElementById('filter').addEventListener('change', load);
   document.getElementById('priority').addEventListener('change', load);
   load();

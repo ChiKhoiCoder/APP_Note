@@ -126,6 +126,16 @@ def index(request: Request):
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+
+# serve favicon if present to avoid 500s on clients requesting /favicon.ico
+@app.get('/favicon.ico')
+def favicon():
+    p = os.path.join(os.path.dirname(__file__), 'static', 'favicon.ico')
+    if os.path.exists(p):
+        from fastapi.responses import FileResponse
+        return FileResponse(p)
+    return Response(status_code=204)
+
 @app.get("/register", response_class=HTMLResponse)
 def register_page(request: Request):
     return templates.TemplateResponse("register.html", {"request": request})
