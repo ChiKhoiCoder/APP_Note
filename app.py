@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
-import datetime, uuid, sqlite3, os, hashlib, hmac, binascii
+import datetime, uuid, sqlite3, os, hashlib, hmac, binascii, sys
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -44,8 +44,21 @@ def init_db():
 
 @app.on_event('startup')
 def startup_event():
+    # Ensure DB exists
     if not os.path.exists(DB_PATH):
         init_db()
+    # Try to force stdout/stderr to utf-8 to avoid UnicodeEncodeError in Windows console logging
+    try:
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        try:
+            import importlib
+            importlib.reload(sys)
+        except Exception:
+            pass
 
 def require_user(request: Request):
     # Verify signed session cookie
