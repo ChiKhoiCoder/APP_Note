@@ -130,7 +130,7 @@ def index(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+       return templates.TemplateResponse(request=request, name="login.html", context={})
 
 
 # serve favicon if present to avoid 500s on clients requesting /favicon.ico
