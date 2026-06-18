@@ -5,6 +5,12 @@ from fastapi.staticfiles import StaticFiles
 from typing import Optional
 import datetime, uuid, sqlite3, os, hashlib, hmac, binascii, sys
 
+# Ensure python uses UTF-8 mode to avoid console encoding errors on Windows
+try:
+    os.environ.setdefault('PYTHONUTF8', '1')
+except Exception:
+    pass
+
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
