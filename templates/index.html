@@ -88,6 +88,9 @@
                 <input id="search" type="text" placeholder="Tìm kiếm..." style="flex:1">
                 <select id="filter"><option value="">Tất cả</option><option value="todo">Chưa xong</option><option value="done">Đã xong</option></select>
                 <select id="priority"><option value="">Tất cả ưu tiên</option><option value="high">Cao</option><option value="medium">Trung bình</option><option value="low">Thấp</option></select>
+                <label style="display:flex;align-items:center;gap:6px;margin-left:6px"><input id="select-all" type="checkbox"> Chọn tất cả</label>
+                <button id="complete-selected" class="btn outline" style="background:transparent;color:var(--accent1);border:1px solid rgba(124,92,255,0.08)">Hoàn tất</button>
+                <button id="delete-selected" class="btn outline" style="background:transparent;color:#ff4d6d;border:1px solid rgba(255,77,109,0.08)">Xóa</button>
             </div>
 
             <div id="rem" style="margin-top:12px"></div>
@@ -128,6 +131,19 @@
     }
 </script>
 <script src="/static/app.js"></script>
+<!-- Chat widget -->
+<div class="chat-widget">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button id="chat-toggle" class="chat-toggle">Chat trợ lý</button></div>
+    <div id="chat-panel" class="chat-panel" style="display:none">
+        <div class="chat-header"><div>Trợ lý Tasks Pro</div><div><button onclick="document.getElementById('chat-panel').style.display='none'" class="chat-toggle">✕</button></div></div>
+        <div id="chat-body" class="chat-body"></div>
+        <form id="chat-form" class="chat-input" onsubmit="return false">
+            <input id="chat-input-field" placeholder="Hỏi tôi điều gì...">
+            <button class="btn" type="submit">Gửi</button>
+        </form>
+    </div>
+</div>
+<script src="/static/chat.js"></script>
 
 </body>
 </html>

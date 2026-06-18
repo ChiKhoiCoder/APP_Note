@@ -4,6 +4,9 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
 import datetime, uuid, sqlite3, os, hashlib, hmac, binascii, sys
+import os as _os
+import json
+import httpx
 
 # Ensure python uses UTF-8 mode to avoid console encoding errors on Windows
 try:
@@ -47,6 +50,33 @@ def init_db():
     )''')
     conn.commit()
     conn.close()
+    # ensure chats table exists
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT,
+            role TEXT,
+            content TEXT,
+            created TEXT
+        )''')
+        conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    # ensure position column exists for drag-and-drop ordering
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("ALTER TABLE tasks ADD COLUMN position INTEGER DEFAULT 0")
+        conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.on_event('startup')
 def startup_event():
@@ -228,7 +258,7 @@ def api_list_tasks(request: Request, q: Optional[str] = None, status: Optional[s
         return JSONResponse({"tasks": []})
     conn = get_db()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM tasks WHERE username=?', (username,))
+    cur.execute('SELECT * FROM tasks WHERE username=? ORDER BY position ASC', (username,))
     rows = cur.fetchall()
     conn.close()
     tasks = []
@@ -276,6 +306,94 @@ def api_reminders(request: Request, within_days: int = 1):
                 })
     return JSONResponse({'reminders': reminders})
 
+
+# Simple rule-based chat endpoint for assistant/help
+@app.post('/api/chat')
+async def api_chat(request: Request):
+    # read JSON body safely
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        try:
+            form = await request.form()
+            data = dict(form)
+        except Exception:
+            data = {}
+    msg = data.get('message') if isinstance(data, dict) else None
+    if not msg:
+        msg = request.query_params.get('message')
+    if not msg:
+        return JSONResponse({'error': 'no message'}, status_code=400)
+    m = msg.lower()
+    # If OPENAI_API_KEY is configured, proxy to OpenAI ChatCompletion
+    OPENAI_KEY = _os.environ.get('OPENAI_API_KEY')
+    if OPENAI_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                payload = {
+                    'model': 'gpt-3.5-turbo',
+                    'messages': [
+                        {'role': 'system', 'content': 'You are a helpful assistant for a todo web app named Tasks Pro.'},
+                        {'role': 'user', 'content': msg}
+                    ],
+                    'max_tokens': 300
+                }
+                headers = {'Authorization': f'Bearer {OPENAI_KEY}'}
+                r = await client.post('https://api.openai.com/v1/chat/completions', json=payload, headers=headers)
+                jr = r.json()
+                if r.status_code == 200 and 'choices' in jr and jr['choices']:
+                    reply = jr['choices'][0]['message']['content']
+                    return JSONResponse({'reply': reply})
+        except Exception:
+            pass
+
+    # very small rule-based replies
+    if 'hello' in m or 'xin chào' in m or 'hi' in m:
+        reply = 'Xin chào! Tôi là trợ lý Tasks Pro — tôi có thể giúp bạn với nhắc việc, tìm hiểu tính năng hoặc hướng dẫn deploy.'
+    elif 'nhắc' in m or 'remind' in m:
+        reply = 'Bạn có thể bật nhắc bằng checkbox ở góc phải bên dưới; để gửi email/SMS, cấu hình SMTP/Twilio trong cài đặt server.'
+    elif 'deploy' in m or 'render' in m or 'heroku' in m:
+        reply = 'Để deploy, dùng Docker hoặc Render/Heroku. Tôi đã thêm Dockerfile & Procfile; bạn cần đặt TODO_SECRET và đảm bảo data.db có quyền ghi.'
+    elif 'thống kê' in m or 'chart' in m:
+        reply = 'Thống kê hiển thị tổng, hoàn thành và tỷ lệ — biểu đồ dùng Chart.js.'
+    else:
+        reply = "Xin lỗi, tôi chưa hiểu. Hỏi về 'nhắc', 'deploy', 'thống kê' hoặc 'help' nhé."
+    # persist chat history if user logged in
+    session = request.cookies.get('session')
+    username = None
+    if session:
+        username = _verify_session_cookie(session)
+    try:
+        if username:
+            conn = get_db(); cur = conn.cursor()
+            cur.execute('INSERT INTO chats(username, role, content, created) VALUES(?,?,?,?)', (username, 'user', msg, _now_iso()))
+            cur.execute('INSERT INTO chats(username, role, content, created) VALUES(?,?,?,?)', (username, 'assistant', reply, _now_iso()))
+            conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return JSONResponse({'reply': reply})
+
+
+@app.get('/api/chat/history')
+def api_chat_history(request: Request, limit: int = 50):
+    session = request.cookies.get('session')
+    if not session:
+        return JSONResponse({'messages': []})
+    username = _verify_session_cookie(session)
+    if not username:
+        return JSONResponse({'messages': []})
+    conn = get_db(); cur = conn.cursor()
+    cur.execute('SELECT role, content, created FROM chats WHERE username=? ORDER BY id DESC LIMIT ?', (username, limit))
+    rows = cur.fetchall(); conn.close()
+    msgs = []
+    for r in reversed(rows):
+        msgs.append({'role': r['role'], 'content': r['content'], 'created': r['created']})
+    return JSONResponse({'messages': msgs})
+
 @app.post("/api/tasks")
 def api_create_task(request: Request, title: str = Form(...), category: str = Form(""), deadline: str = Form(""), priority: str = Form("medium")):
     username = request.cookies.get('session')
@@ -286,8 +404,15 @@ def api_create_task(request: Request, title: str = Form(...), category: str = Fo
     tid = str(uuid.uuid4())
     conn = get_db()
     cur = conn.cursor()
-    cur.execute('INSERT INTO tasks(id,username,title,completed,created,deadline,category,priority) VALUES(?,?,?,?,?,?,?,?)',
-                (tid, username, title, 0, _now_iso(), deadline, category, priority))
+    # decide position = max(position)+1
+    try:
+        cur.execute('SELECT MAX(position) as mx FROM tasks WHERE username=?', (username,))
+        mx = cur.fetchone()['mx'] or 0
+        pos = int(mx) + 1
+    except Exception:
+        pos = 0
+    cur.execute('INSERT INTO tasks(id,username,title,completed,created,deadline,category,priority,position) VALUES(?,?,?,?,?,?,?,?,?)',
+                (tid, username, title, 0, _now_iso(), deadline, category, priority, pos))
     conn.commit()
     conn.close()
     task = {"id": tid, "title": title, "completed": False, "created": _now_iso(), "deadline": deadline, "category": category, "priority": priority}
@@ -355,6 +480,33 @@ def api_delete_task(task_id: str, request: Request):
         conn.close(); raise HTTPException(status_code=404)
     conn.commit(); conn.close()
     return JSONResponse({"ok": True})
+
+
+@app.post('/api/tasks/reorder')
+def api_reorder(request: Request):
+    # body: {order: [id1, id2, ...]}
+    try:
+        payload = request.json()
+    except Exception:
+        payload = {}
+    order = payload.get('order') if isinstance(payload, dict) else None
+    session = request.cookies.get('session')
+    if session:
+        username = _verify_session_cookie(session)
+    else:
+        username = None
+    if not username:
+        raise HTTPException(status_code=401)
+    if not order or not isinstance(order, list):
+        return JSONResponse({'error': 'invalid order'}, status_code=400)
+    conn = get_db(); cur = conn.cursor()
+    try:
+        for idx, tid in enumerate(order):
+            cur.execute('UPDATE tasks SET position=? WHERE id=? AND username=?', (idx, tid, username))
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({'ok': True})
 
 @app.get("/api/stats")
 def api_stats(request: Request):
