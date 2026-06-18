@@ -119,14 +119,34 @@ def _verify_session_cookie(cookie: str) -> Optional[str]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+async def index(request: Request, task: str = None, delete: str = None):
     session = request.cookies.get('session')
     if not session:
         return RedirectResponse('/login')
     username = _verify_session_cookie(session)
     if not username:
         return RedirectResponse('/login')
-    return templates.TemplateResponse("index.html", {"request": request, "username": username})
+
+    # build todo_list for template context
+    todo_list = []
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute('SELECT * FROM tasks WHERE username=?', (username,))
+        rows = cur.fetchall()
+        for r in rows:
+            todo_list.append({
+                'id': r['id'], 'title': r['title'], 'completed': bool(r['completed']), 'created': r['created'],
+                'deadline': r['deadline'], 'category': r['category'], 'priority': r['priority']
+            })
+        conn.close()
+    except Exception:
+        todo_list = []
+
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"todos": todo_list, "username": username}
+    )
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
