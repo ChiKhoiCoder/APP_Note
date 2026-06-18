@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Todo List</title>
+</head>
+<body>
+
+<h1>Chào Mừng Bạn Đến Với TODOLIST</h1>
+
+<!-- ===== THÊM ===== -->
+<form action="/add" method="get">
+    <input type="text" name="task" placeholder="Công việc mới" required>
+    <button type="submit">Thêm</button>
+</form>
+
+<hr>
+
+<h2>Danh Sách Công Việc</h2>
+
+<ul>
+{% for t in tasks %}
+    <li>
+        {{ t }}
+
+        <!-- ===== XÓA ===== -->
+        <a href="/delete/{{ loop.index0 }}">Xóa</a>
+
+        <!-- ===== SỬA ===== -->
+        <form action="/update/{{ loop.index0 }}" method="get" style="display:inline;">
+            <input type="text" name="task" placeholder="Sửa công việc">
+            <button type="submit">Sửa</button>
+        </form>
+    </li>
+{% endfor %}
+</ul>
+
+</body>
+</html>

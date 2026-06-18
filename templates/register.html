@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Register</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body>
+<div class="app"><div class="card" style="max-width:420px;margin:80px auto">
+  <h2>Đăng ký</h2>
+  <form method="post" action="/api/register" onsubmit="event.preventDefault(); reg(this)">
+    <input name="username" placeholder="Tên" required>
+    <input name="password" type="password" placeholder="Mật khẩu" required>
+    <button class="btn" type="submit">Tạo tài khoản</button>
+  </form>
+  <div style="margin-top:12px"><a href="/login">Bạn đã có tài khoản?</a></div>
+</div></div>
+<script>
+async function reg(form){ const fd=new FormData(form); const res=await fetch('/api/register',{method:'POST',body:fd}); if(res.ok) location.href='/'; else alert('Lỗi'); }
+</script>
+</body>
+</html>

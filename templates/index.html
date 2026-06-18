@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Todo List</title>
+    <style>
+        :root{
+            --bg1: #f5f7ff; /* soft blue */
+            --bg2: #fff6f8; /* warm peach */
+            --card: #ffffff;
+            --accent1: #7c5cff; /* violet */
+            --accent2: #ff6b9a; /* coral pink */
+            --muted: #4b5960;
+            --danger: #ff4d6d;
+        }
+        html,body{height:100%;}
+        body{
+            margin:0;
+            font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+            background: linear-gradient(135deg,var(--bg1),var(--bg2));
+            color:var(--muted);
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:40px;
+        }
+        .container{
+            width:100%;
+            max-width:760px;
+            background:var(--card);
+            border-radius:14px;
+            box-shadow:0 10px 30px rgba(33,47,70,0.08);
+            padding:32px;
+        }
+        h1{margin:0 0 8px 0;color:var(--accent);font-size:24px}
+        form{margin:16px 0}
+        input[type="text"]{padding:10px 12px;border-radius:8px;border:1px solid #e6edf3;width:60%;margin-right:8px}
+        button{background:linear-gradient(90deg,var(--accent1),var(--accent2));color:#fff;border:none;padding:10px 14px;border-radius:10px;cursor:pointer;box-shadow:0 6px 18px rgba(124,92,255,0.14);transition:transform .14s ease,box-shadow .14s ease}
+        button:hover{transform:translateY(-2px);box-shadow:0 14px 28px rgba(124,92,255,0.12)}
+        hr{border:none;border-top:1px solid #f0f3f7;margin:18px 0}
+        ul{list-style:none;padding:0;margin:0}
+        li{display:flex;align-items:center;justify-content:space-between;padding:12px 8px;border-radius:8px;border:1px solid #fbfbfb;margin-bottom:10px;background:linear-gradient(180deg,#fff,#fbfcff)}
+        li small{color:#9aa4b2}
+        .actions{display:flex;gap:12px;align-items:center}
+        a{color:var(--accent2);text-decoration:none;font-weight:700}
+        form.inline{display:inline}
+        input.update{padding:6px 8px;border-radius:8px;border:1px solid #e6edf3}
+        @media (max-width:600px){
+            input[type="text"]{width:100%;margin-bottom:8px}
+            .actions{flex-direction:column;align-items:flex-end}
+        }
+    </style>
+</head>
+<body>
+
+<div class="app">
+    <header class="top">
+        <div>
+            <h1>Tasks Pro</h1>
+            <div class="muted">Hiện đại • Nhanh • Riêng tư</div>
+        </div>
+        <div class="controls">
+            {% if username %}
+                <div class="muted">Xin chào, <strong>{{ username }}</strong></div>
+                <form method="post" action="/api/logout" style="display:inline"><button class="btn ghost">Đăng xuất</button></form>
+            {% else %}
+                <a href="/login" class="btn outline">Đăng nhập</a>
+                <a href="/register" class="btn">Đăng ký</a>
+            {% endif %}
+        </div>
+    </header>
+
+    <main style="display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start">
+        <section class="card">
+            <form id="addForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <input style="flex:1" type="text" name="title" placeholder="Tiêu đề công việc" required>
+                <input type="text" name="category" placeholder="Phân loại">
+                <input type="date" name="deadline">
+                <select name="priority"><option value="high">Cao</option><option value="medium" selected>Trung bình</option><option value="low">Thấp</option></select>
+                <button class="btn" type="submit">Thêm</button>
+            </form>
+
+            <div class="controls" style="margin-top:12px">
+                <input id="search" type="text" placeholder="Tìm kiếm..." style="flex:1">
+                <select id="filter"><option value="">Tất cả</option><option value="todo">Chưa xong</option><option value="done">Đã xong</option></select>
+                <select id="priority"><option value="">Tất cả ưu tiên</option><option value="high">Cao</option><option value="medium">Trung bình</option><option value="low">Thấp</option></select>
+            </div>
+
+            <div id="rem" style="margin-top:12px"></div>
+
+            <div class="tasks" id="list" style="margin-top:12px"></div>
+        </section>
+
+        <aside>
+            <div class="card" style="margin-bottom:12px">
+                <h3>Thống kê</h3>
+                <div id="stat" style="font-size:14px;margin-top:8px"></div>
+                <div class="stats" style="margin-top:12px">
+                    <div class="card" style="padding:12px"><strong id="total">0</strong><div class="muted">Tổng</div></div>
+                    <div class="card" style="padding:12px"><strong id="done">0</strong><div class="muted">Hoàn thành</div></div>
+                    <div class="card" style="padding:12px"><strong id="percent">0%</strong><div class="muted">Tỷ lệ</div></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Gợi ý nhanh</h3>
+                <div class="muted" style="font-size:13px">Các việc sắp đến hạn sẽ được hiển thị ở đây.</div>
+                <div id="quick-rem" style="margin-top:10px"></div>
+            </div>
+        </aside>
+    </main>
+</div>
+
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/app.js"></script>
+
+</body>
+</html>

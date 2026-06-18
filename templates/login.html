@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Login</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body>
+<div class="app"><div class="card" style="max-width:420px;margin:80px auto">
+  <h2>Đăng nhập</h2>
+  <form method="post" action="/api/login" onsubmit="event.preventDefault(); login(this)">
+    <input name="username" placeholder="Tên" required>
+    <input name="password" type="password" placeholder="Mật khẩu" required>
+    <button class="btn" type="submit">Đăng nhập</button>
+  </form>
+  <div style="margin-top:12px"><a href="/register">Bạn chưa có tài khoản?</a></div>
+</div></div>
+<script>
+async function login(form){
+  const fd=new FormData(form);
+  const res=await fetch('/api/login',{method:'POST',body:fd});
+  if(res.ok) location.href='/'; else alert('Đăng nhập thất bại');
+}
+</script>
+</body>
+</html>
