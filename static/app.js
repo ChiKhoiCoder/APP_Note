@@ -49,6 +49,28 @@ async function load(){
       ul.innerHTML = '<strong>Cảnh báo:</strong> có công việc gần hạn:' + '<ul style="margin:8px 0">' + rems.reminders.map(x=>`<li>${escapeHtml(x.title)} — ${x.deadline.split('T')[0]}</li>`).join('') + '</ul>';
       rem.appendChild(ul);
       quick.innerHTML = '<ul style="margin:6px 0">' + rems.reminders.slice(0,3).map(x=>`<li>${escapeHtml(x.title)} — ${x.deadline.split('T')[0]}</li>`).join('') + '</ul>';
+
+      // Desktop notifications (deduped via localStorage)
+      try{
+        const key = 'seenReminders_v1';
+        let seen = [];
+        try{ seen = JSON.parse(localStorage.getItem(key) || '[]') }catch(e){ seen = [] }
+        const enable = document.getElementById('enable-noti') && document.getElementById('enable-noti').checked;
+        if(enable){
+          if(Notification.permission !== 'granted'){
+            Notification.requestPermission();
+          }
+        }
+        if(enable && Notification.permission === 'granted'){
+          const unseen = rems.reminders.filter(r=> !seen.includes(r.id));
+          unseen.slice(0,5).forEach(r=>{
+            const n = new Notification('Nhắc việc: '+ r.title, { body: 'Hạn: ' + (r.deadline||''), tag: r.id });
+            playBeep();
+            seen.push(r.id);
+          });
+          try{ localStorage.setItem(key, JSON.stringify(seen)) }catch(e){}
+        }
+      }catch(e){ console.warn('notifications failed', e) }
     }
   }catch(e){console.warn('reminders failed',e)}
 }
@@ -67,3 +89,33 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('priority').addEventListener('change', load);
   load();
 });
+
+// beep using WebAudio
+function playBeep(){
+  try{
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = 880;
+    g.gain.value = 0.05;
+    o.connect(g); g.connect(ctx.destination);
+    o.start();
+    setTimeout(()=>{ o.stop(); try{ ctx.close() }catch(e){} }, 180);
+  }catch(e){/* ignore */}
+}
+
+// Initialize notification toggle from localStorage
+try{
+  document.addEventListener('DOMContentLoaded',()=>{
+    const cb = document.getElementById('enable-noti');
+    if(!cb) return;
+    const val = localStorage.getItem('enable-noti');
+    cb.checked = val === '1';
+    cb.addEventListener('change', async ()=>{
+      localStorage.setItem('enable-noti', cb.checked ? '1' : '0');
+      if(cb.checked && Notification.permission !== 'granted'){
+        await Notification.requestPermission();
+      }
+    });
+  });
+}catch(e){}
