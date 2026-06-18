@@ -44,12 +44,17 @@ function toast(msg, type='', actionText=null, actionCallback=null){
 function debounce(fn,wait=250){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait) } }
 
 function renderTasks(tasks){
-  const list = document.getElementById('list'); list.innerHTML='';
+  const list = document.getElementById('list');
+  // capture previous positions for FLIP
+  const prevRects = {};
+  list.querySelectorAll('.task').forEach(n=>{ try{ prevRects[n.dataset.id] = n.getBoundingClientRect(); }catch(e){} });
+  list.innerHTML='';
   tasks.forEach(t=>{
     const el=document.createElement('div'); el.className='task'; el.draggable = true; el.dataset.id = t.id;
     const handle = document.createElement('span'); handle.className='drag-handle'; handle.innerHTML='☰'; handle.style.marginRight='8px';
     const left=document.createElement('div');
-    left.innerHTML = `<div><input type=checkbox ${t.completed? 'checked':''} data-id='${t.id}' class='check'> <strong>${escapeHtml(t.title)}</strong></div><div class='meta'>${t.category||''} • ${t.created.slice(0,10)} ${t.deadline? '• due '+t.deadline.split('T')[0]:''}</div>`;
+    const avatarHtml = t.assignee_avatar ? `<div class='avatar' title='${escapeHtml(t.assignee||'')}' style='width:36px;height:36px;border-radius:999px;overflow:hidden;display:flex;align-items:center;justify-content:center'><img src='${t.assignee_avatar}' alt='${escapeHtml(t.assignee||'')}'/></div>` : `<div class='avatar' title='${escapeHtml(t.assignee||'')}' style='width:36px;height:36px;border-radius:999px;background:linear-gradient(90deg,#7c5cff,#ff6b9a);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700'>${escapeHtml((t.assignee||'').split(' ').map(x=>x[0]).join('').slice(0,2) || t.title.slice(0,2))}</div>`;
+    left.innerHTML = `<div style="display:flex;align-items:center;gap:8px">${avatarHtml}<input type=checkbox ${t.completed? 'checked':''} data-id='${t.id}' class='check'> <strong>${escapeHtml(t.title)}</strong></div><div class='meta'>${t.category||''} • ${t.created.slice(0,10)} ${t.deadline? '• due '+t.deadline.split('T')[0]:''}</div>`;
     const right=document.createElement('div'); right.className='right';
     const pri=document.createElement('div'); pri.className='badge '+(t.priority=='high'?'pri-high':t.priority=='low'?'pri-low':'pri-med'); pri.textContent = t.priority[0].toUpperCase()+t.priority.slice(1);
         const del=document.createElement('button'); del.textContent='Xóa'; del.className='btn'; del.onclick=async ()=>{
@@ -79,6 +84,18 @@ function renderTasks(tasks){
     el.appendChild(left); el.appendChild(right);
     el.classList.add('enter');
     list.appendChild(el);
+    // FLIP - compute new rect and animate from old position
+    try{
+      const newRect = el.getBoundingClientRect();
+      const oldRect = prevRects[el.dataset.id];
+      if(oldRect){
+        const dx = oldRect.left - newRect.left;
+        const dy = oldRect.top - newRect.top;
+        el.style.transform = `translate(${dx}px, ${dy}px)`;
+        el.style.transition = 'transform 0s';
+        requestAnimationFrame(()=>{ el.style.transition = 'transform 260ms cubic-bezier(.2,.8,.2,1)'; el.style.transform = ''; });
+      }
+    }catch(e){}
     requestAnimationFrame(()=>{ el.classList.remove('enter'); });
   });
   qsa('.check').then(arr=>arr.forEach(cb=>cb.addEventListener('change',e=>{ api.toggle(e.target.dataset.id).then(()=>{ toast('Đã cập nhật trạng thái'); load(); }).catch(()=>{ toast('Cập nhật thất bại') }) })));
@@ -109,13 +126,127 @@ function renderTasks(tasks){
 
 function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
+// --- Board rendering ---
+function renderBoard(tasks){
+  const board = document.getElementById('board'); if(!board) return;
+  // capture previous card positions for FLIP animation
+  const prevRects = {};
+  board.querySelectorAll('.card').forEach(n=>{ try{ prevRects[n.dataset.id] = n.getBoundingClientRect(); }catch(e){} });
+  board.innerHTML = '';
+  // Use fixed status columns: todo, doing, done
+  const statusCols = [ {key:'todo', title:'To Do'}, {key:'doing', title:'Doing'}, {key:'done', title:'Done'} ];
+  statusCols.forEach(colDef=>{
+    const column = document.createElement('div'); column.className = 'column'; column.dataset.status = colDef.key;
+    const header = document.createElement('div'); header.className = 'col-header'; header.innerHTML = `<div class='col-title'>${escapeHtml(colDef.title)}</div><div class='col-count'>0</div>`;
+    const list = document.createElement('div'); list.className = 'col-list';
+    column.appendChild(header); column.appendChild(list); board.appendChild(column);
+    column.addEventListener('dragover', e=>{ e.preventDefault(); column.classList.add('drag-over'); });
+    column.addEventListener('dragleave', e=>{ column.classList.remove('drag-over'); });
+    column.addEventListener('drop', async e=>{
+      e.preventDefault(); column.classList.remove('drag-over');
+      const id = e.dataTransfer.getData('text/plain'); if(!id) return;
+      try{
+        const f = new FormData(); f.append('status', colDef.key);
+        await fetch(`/api/tasks/${id}`, { method: 'PUT', body: f });
+        toast('Di chuyển sang '+colDef.title, 'success');
+        await load();
+      }catch(err){ toast('Không thể di chuyển', 'warn') }
+    });
+  });
+  // populate cards into status columns
+  tasks.forEach(t=>{
+    const status = t.status || 'todo';
+    const column = board.querySelector(`.column[data-status="${CSS.escape(status)}"]`);
+    if(!column) return;
+    const list = column.querySelector('.col-list');
+    const card = document.createElement('div'); card.className = 'card'; card.draggable = true; card.dataset.id = t.id;
+    const imgHtml = `<div class='card-img'>${t.image ? `<img src='${t.image}' style='width:100%;height:100%;object-fit:cover'/>` : ''}</div>`;
+    const assignee = escapeHtml(t.assignee || '');
+    const assigneeHtml = t.assignee_avatar ? `<div class='avatar' title='${assignee}' style='overflow:hidden;width:40px;height:40px;border-radius:999px'><img src='${t.assignee_avatar}' alt='${assignee}'/></div>` : `<div class='avatar' title='${assignee}' style='background:linear-gradient(90deg,#7c5cff,#ff6b9a)'>${escapeHtml((assignee||t.title).split(' ').map(x=>x[0]||'').join('').slice(0,2))}</div>`;
+    card.innerHTML = `<div class='card-top'><div><div class='card-title'>${escapeHtml(t.title)}</div><div class='card-meta'>${t.deadline? '<i class="fa fa-calendar"></i> '+escapeHtml(t.deadline.split('T')[0]) : ''}</div>${imgHtml}<div class='progress'><i style='width:${Math.min(100, (t.completed?100: Math.floor(Math.random()*60)+20))}%'></i></div></div><div style='text-align:right'>${assigneeHtml}<div style='margin-top:8px' class='badges'><div class='tag'>${escapeHtml((t.tags||'').split(',').slice(0,2).join(', '))}</div></div></div></div><div class='card-footer'><div style='font-size:12px;color:#94a3b8'>${escapeHtml(t.category||'')}</div><div style='display:flex;gap:8px'><button class='btn small' title='Comment'><i class='fa fa-comment'></i></button><button class='btn small' title='More'><i class='fa fa-ellipsis-h'></i></button></div></div>`;
+    list.appendChild(card);
+    // FLIP: animate from previous position if present
+    try{
+      const newRect = card.getBoundingClientRect();
+      const oldRect = prevRects[card.dataset.id];
+      if(oldRect){
+        const dx = oldRect.left - newRect.left;
+        const dy = oldRect.top - newRect.top;
+        card.style.transform = `translate(${dx}px, ${dy}px)`;
+        card.style.transition = 'transform 0s';
+        requestAnimationFrame(()=>{ card.style.transition = 'transform 280ms cubic-bezier(.2,.8,.2,1)'; card.style.transform = ''; });
+      }
+    }catch(e){}
+    card.addEventListener('dragstart', e=>{ e.dataTransfer.setData('text/plain', t.id); card.classList.add('dragging'); });
+    card.addEventListener('dragend', e=>{ card.classList.remove('dragging'); });
+    // comment and more button handlers
+    const commentBtn = card.querySelector('button[title="Comment"]');
+    const moreBtn = card.querySelector('button[title="More"]');
+    if(commentBtn) commentBtn.addEventListener('click', ()=>{ const q = prompt('Gửi bình luận/ghi chú cho thẻ này:'); if(q){ fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({message: 'Comment for task '+t.id+': '+q})}).then(()=>toast('Ghi chú đã gửi','success')).catch(()=>toast('Không gửi được')) } });
+    if(moreBtn) moreBtn.addEventListener('click', ()=>{ const action = prompt('Chọn: edit/delete'); if(!action) return; if(action==='delete'){ if(confirm('Xóa thẻ?')){ fetch(`/api/tasks/${t.id}`,{method:'DELETE'}).then(()=>{ toast('Đã xóa','warn'); load(); }).catch(()=>toast('Lỗi xóa')) } } else if(action==='edit'){ const n = prompt('Sửa tiêu đề', t.title); if(n && n!==t.title){ const f = new FormData(); f.append('title', n); fetch(`/api/tasks/${t.id}`,{method:'PUT', body: f}).then(()=>{ toast('Đã cập nhật','success'); load(); }).catch(()=>toast('Lỗi cập nhật')) } } else { toast('Tùy chọn không hợp lệ') } });
+    card.addEventListener('dblclick', async ()=>{
+      const n = prompt('Sửa tiêu đề', t.title); if(n && n !== t.title){ const f = new FormData(); f.append('title', n); try{ await fetch(`/api/tasks/${t.id}`, {method:'PUT', body: f}); toast('Đã cập nhật', 'success'); load(); }catch(e){ toast('Cập nhật thất bại') } }
+    });
+  });
+  // update counts
+  board.querySelectorAll('.column').forEach(col=>{ const cnt = col.querySelectorAll('.card').length; const badge = col.querySelector('.col-count'); if(badge) badge.textContent = cnt; });
+}
+
+// toggle view
+function setView(v){ const listMain = document.querySelector('main'); const boardView = document.getElementById('board-view'); const btn = document.getElementById('view-toggle'); if(v==='board'){ if(listMain) listMain.style.display='none'; if(boardView) boardView.style.display='block'; if(btn) btn.textContent='List'; localStorage.setItem('view','board'); } else { if(listMain) listMain.style.display='grid'; if(boardView) boardView.style.display='none'; if(btn) btn.textContent='Board'; localStorage.setItem('view','list'); } }
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  const btn = document.getElementById('view-toggle');
+  if(btn){ btn.addEventListener('click', ()=>{ const cur = localStorage.getItem('view') || 'list'; setView(cur==='list'?'board':'list'); });
+  }
+  // global brand add/search handlers
+  const brandAdd = document.querySelector('.brand-top .btn');
+  if(brandAdd){ brandAdd.addEventListener('click', ()=>{ setView('list'); const t = document.querySelector('#addForm input[name=title]'); if(t){ t.focus(); t.select(); } }); }
+  const globalSearch = document.getElementById('global-search');
+  if(globalSearch){ globalSearch.addEventListener('input', debounce((e)=>{ const v = e.target.value||''; const s = document.getElementById('search'); if(s){ s.value = v; load(); } }, 250)); }
+  // sidebar filter buttons
+  document.querySelectorAll('.side-item').forEach(b=> b.addEventListener('click', ()=>{
+    document.querySelectorAll('.side-item').forEach(x=>x.classList.remove('active')); b.classList.add('active');
+    // set filter select to this item's filter and reload
+    const f = b.dataset.filter || '';
+    const sel = document.getElementById('filter'); if(sel) sel.value = f || '';
+    load();
+  }));
+  // left navigation quick actions
+  document.querySelectorAll('.left-nav button').forEach((btn, idx)=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.left-nav button').forEach(x=>x.classList.remove('active'));
+      btn.classList.add('active');
+      // simple mapping: 0 dashboard -> board, 1 tasks -> list, 2 calendar -> filter by deadline, 3 reports -> open stats, 4 settings -> toast
+      if(idx===0) { setView('board'); toast('Dashboard'); }
+      else if(idx===1) { setView('list'); load(); }
+      else if(idx===2) { setView('list'); document.getElementById('filter').value=''; toast('Calendar view (filter by date)'); }
+      else if(idx===3) { setView('list'); toast('Bật Thống kê'); document.getElementById('statsChart') && window.scrollTo({ top: 0, behavior: 'smooth' }); }
+      else { toast('Cài đặt'); }
+    });
+  });
+  // make stats widgets clickable to filter
+  const totalEl = document.getElementById('total'); const doneEl = document.getElementById('done'); const pctEl = document.getElementById('percent'); const statArea = document.getElementById('stat');
+  if(totalEl){ totalEl.style.cursor='pointer'; totalEl.addEventListener('click', ()=>{ document.getElementById('filter').value=''; setView('list'); load(); }); }
+  if(doneEl){ doneEl.style.cursor='pointer'; doneEl.addEventListener('click', ()=>{ document.getElementById('filter').value='done'; setView('list'); load(); }); }
+  if(pctEl){ pctEl.style.cursor='pointer'; pctEl.addEventListener('click', ()=>{ document.getElementById('filter').value='todo'; setView('list'); load(); }); }
+  if(statArea){ statArea.style.cursor='pointer'; statArea.addEventListener('click', ()=>{ setView('board'); }); }
+});
+
 async function load(){
   const q=document.getElementById('search').value;
   const status=document.getElementById('filter').value;
   const priority=document.getElementById('priority').value;
   const tag = document.getElementById('filter-tag') ? document.getElementById('filter-tag').value.trim() : '';
   const data=await api.getTasks(q,status,priority, tag);
-  renderTasks(data.tasks);
+  const view = localStorage.getItem('view') || 'list';
+  if(view === 'board'){
+    setView('board');
+    renderBoard(data.tasks);
+  } else {
+    setView('list');
+    renderTasks(data.tasks);
+  }
   const st = await api.stats();
   // basic stat summary
   document.getElementById('stat').textContent = `${st.total} việc — ${st.completed} xong — ${st.percent}%`;
@@ -191,6 +322,23 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('addForm').addEventListener('submit',async e=>{
     e.preventDefault(); const f=new FormData(e.target); try{ const res = await api.create(f); if(res && res.task) toast('Đã thêm: ' + (res.task.title||'item'), 'success'); else toast('Không thêm được'); }catch(e){ toast('Lỗi khi thêm','warn') } e.target.reset(); load();
   });
+  // assignee avatar upload
+  const uploadBtn = document.getElementById('upload-avatar');
+  if(uploadBtn){
+    uploadBtn.addEventListener('click', async ()=>{
+      const nameInput = document.getElementById('assignee-name');
+      const fileInput = document.getElementById('assignee-file');
+      if(!nameInput || !fileInput) return toast('Chưa nhập tên hoặc chưa chọn file', 'warn');
+      const name = nameInput.value.trim(); if(!name) return toast('Nhập tên người phụ trách trước', 'warn');
+      const file = fileInput.files && fileInput.files[0]; if(!file) return toast('Chưa chọn file', 'warn');
+      const fd = new FormData(); fd.append('name', name); fd.append('file', file, file.name);
+      try{
+        const res = await fetch('/api/assignees/avatar', { method: 'POST', body: fd });
+        const j = await res.json(); if(res.ok && j.url){ toast('Avatar đã tải lên', 'success'); fileInput.value = null; load(); }
+        else toast('Không thể tải avatar', 'warn');
+      }catch(e){ console.error(e); toast('Lỗi khi tải avatar', 'warn') }
+    });
+  }
   const debouncedLoad = debounce(load, 300);
   document.getElementById('search').addEventListener('input', debouncedLoad);
   document.getElementById('filter').addEventListener('change', load);

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException, status, Form
+from fastapi import FastAPI, Request, Response, HTTPException, status, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -15,8 +15,9 @@ except Exception:
     pass
 
 app = FastAPI()
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# Mount static using absolute path relative to this file so uvicorn can start from workspace root
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), 'static')), name="static")
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), 'templates'))
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'data.db')
 
@@ -87,12 +88,36 @@ def init_db():
             conn.close()
         except Exception:
             pass
+    # ensure status and assignee columns exist
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'todo'")
+        cur.execute("ALTER TABLE tasks ADD COLUMN assignee TEXT DEFAULT ''")
+        conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    # ensure assignees table exists (map assignee name -> avatar path)
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS assignees (name TEXT PRIMARY KEY, avatar TEXT)')
+        conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.on_event('startup')
 def startup_event():
     # Ensure DB exists
-    if not os.path.exists(DB_PATH):
+    # Run migrations / ensure schema is up-to-date on every startup
+    try:
         init_db()
+    except Exception:
+        pass
     # Try to force stdout/stderr to utf-8 to avoid UnicodeEncodeError in Windows console logging
     try:
         if hasattr(sys.stdout, 'reconfigure'):
@@ -268,17 +293,18 @@ def api_list_tasks(request: Request, q: Optional[str] = None, status: Optional[s
         return JSONResponse({"tasks": []})
     conn = get_db()
     cur = conn.cursor()
+    # include assignee avatar if available via subquery
     if tag:
-        cur.execute('SELECT * FROM tasks WHERE username=? AND tags LIKE ? ORDER BY position ASC', (username, f'%{tag}%'))
+        cur.execute("SELECT tasks.*, (SELECT avatar FROM assignees WHERE name=tasks.assignee) AS assignee_avatar FROM tasks WHERE username=? AND tags LIKE ? ORDER BY position ASC", (username, f'%{tag}%'))
     else:
-        cur.execute('SELECT * FROM tasks WHERE username=? ORDER BY position ASC', (username,))
+        cur.execute("SELECT tasks.*, (SELECT avatar FROM assignees WHERE name=tasks.assignee) AS assignee_avatar FROM tasks WHERE username=? ORDER BY position ASC", (username,))
     rows = cur.fetchall()
     conn.close()
     tasks = []
     for r in rows:
         tasks.append({
             'id': r['id'], 'title': r['title'], 'completed': bool(r['completed']), 'created': r['created'],
-            'deadline': r['deadline'], 'category': r['category'], 'priority': r['priority'], 'tags': r['tags'] if 'tags' in r.keys() else ''
+            'deadline': r['deadline'], 'category': r['category'], 'priority': r['priority'], 'tags': r['tags'] if 'tags' in r.keys() else '', 'status': r['status'] if 'status' in r.keys() else 'todo', 'assignee': r['assignee'] if 'assignee' in r.keys() else '', 'assignee_avatar': r['assignee_avatar'] if 'assignee_avatar' in r.keys() else None
         })
     res = tasks
     if q:
@@ -443,6 +469,42 @@ async def api_chat(request: Request):
     return JSONResponse({'reply': reply})
 
 
+@app.post('/api/assignees/avatar')
+async def api_upload_assignee_avatar(request: Request, name: str = Form(...), file: UploadFile = File(...)):
+    # only allow logged-in users to upload
+    session = request.cookies.get('session')
+    if session:
+        username = _verify_session_cookie(session)
+    else:
+        username = None
+    if not username:
+        raise HTTPException(status_code=401)
+    # ensure avatars dir
+    avatars_dir = os.path.join(os.path.dirname(__file__), 'static', 'avatars')
+    os.makedirs(avatars_dir, exist_ok=True)
+    import re
+    safe = re.sub(r'[^a-z0-9_-]', '_', name.lower())[:64]
+    ext = os.path.splitext(file.filename)[1] or '.png'
+    fname = f"{safe}{ext}"
+    out_path = os.path.join(avatars_dir, fname)
+    contents = await file.read()
+    with open(out_path, 'wb') as fh:
+        fh.write(contents)
+    url = f"/static/avatars/{fname}"
+    # persist mapping
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute('CREATE TABLE IF NOT EXISTS assignees (name TEXT PRIMARY KEY, avatar TEXT)')
+        cur.execute('INSERT OR REPLACE INTO assignees(name, avatar) VALUES(?,?)', (name, url))
+        conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return JSONResponse({'ok': True, 'url': url})
+
+
 @app.get('/api/chat/history')
 def api_chat_history(request: Request, limit: int = 50):
     session = request.cookies.get('session')
@@ -460,7 +522,7 @@ def api_chat_history(request: Request, limit: int = 50):
     return JSONResponse({'messages': msgs})
 
 @app.post("/api/tasks")
-def api_create_task(request: Request, title: str = Form(...), category: str = Form(""), deadline: str = Form(""), priority: str = Form("medium"), tags: str = Form("")):
+def api_create_task(request: Request, title: str = Form(...), category: str = Form(""), deadline: str = Form(""), priority: str = Form("medium"), tags: str = Form(""), status: str = Form("todo"), assignee: str = Form("")):
     username = request.cookies.get('session')
     if username:
         username = _verify_session_cookie(username)
@@ -476,15 +538,15 @@ def api_create_task(request: Request, title: str = Form(...), category: str = Fo
         pos = int(mx) + 1
     except Exception:
         pos = 0
-    cur.execute('INSERT INTO tasks(id,username,title,completed,created,deadline,category,priority,position,tags) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                (tid, username, title, 0, _now_iso(), deadline, category, priority, pos, tags))
+    cur.execute('INSERT INTO tasks(id,username,title,completed,created,deadline,category,priority,position,tags,status,assignee) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                (tid, username, title, 0, _now_iso(), deadline, category, priority, pos, tags, status, assignee))
     conn.commit()
     conn.close()
-    task = {"id": tid, "title": title, "completed": False, "created": _now_iso(), "deadline": deadline, "category": category, "priority": priority, 'tags': tags}
+    task = {"id": tid, "title": title, "completed": False, "created": _now_iso(), "deadline": deadline, "category": category, "priority": priority, 'tags': tags, 'status': status, 'assignee': assignee}
     return JSONResponse({"task": task})
 
 @app.put("/api/tasks/{task_id}")
-def api_update_task(request: Request, task_id: str, title: Optional[str] = Form(None), deadline: Optional[str] = Form(None), category: Optional[str] = Form(None), priority: Optional[str] = Form(None), tags: Optional[str] = Form(None)):
+def api_update_task(request: Request, task_id: str, title: Optional[str] = Form(None), deadline: Optional[str] = Form(None), category: Optional[str] = Form(None), priority: Optional[str] = Form(None), tags: Optional[str] = Form(None), status: Optional[str] = Form(None), assignee: Optional[str] = Form(None)):
     username = request.cookies.get('session')
     if username:
         username = _verify_session_cookie(username)
@@ -507,13 +569,17 @@ def api_update_task(request: Request, task_id: str, title: Optional[str] = Form(
         updates.append('priority=?'); params.append(priority)
     if tags is not None:
         updates.append('tags=?'); params.append(tags)
+    if status is not None:
+        updates.append('status=?'); params.append(status)
+    if assignee is not None:
+        updates.append('assignee=?'); params.append(assignee)
     if updates:
         params.extend([task_id, username])
         cur.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id=? AND username=?", params)
         conn.commit()
     cur.execute('SELECT * FROM tasks WHERE id=?', (task_id,))
     r = cur.fetchone(); conn.close()
-    return JSONResponse({"task": {"id": r['id'], "title": r['title'], "completed": bool(r['completed']), "created": r['created'], "deadline": r['deadline'], "category": r['category'], "priority": r['priority'], "tags": r.get('tags') if isinstance(r, sqlite3.Row) else r['tags']}})
+    return JSONResponse({"task": {"id": r['id'], "title": r['title'], "completed": bool(r['completed']), "created": r['created'], "deadline": r['deadline'], "category": r['category'], "priority": r['priority'], "tags": (r['tags'] if 'tags' in r.keys() else ''), "status": (r['status'] if 'status' in r.keys() else 'todo'), "assignee": (r['assignee'] if 'assignee' in r.keys() else '')}})
 
 @app.post("/api/tasks/{task_id}/toggle")
 def api_toggle_task(task_id: str, request: Request):
@@ -529,6 +595,14 @@ def api_toggle_task(task_id: str, request: Request):
         conn.close(); raise HTTPException(status_code=404)
     new = 0 if row['completed'] else 1
     cur.execute('UPDATE tasks SET completed=? WHERE id=? AND username=?', (new, task_id, username))
+    # if marked completed, set status to done; if unchecked, set to todo
+    try:
+        if new:
+            cur.execute('UPDATE tasks SET status=? WHERE id=? AND username=?', ('done', task_id, username))
+        else:
+            cur.execute('UPDATE tasks SET status=? WHERE id=? AND username=?', ('todo', task_id, username))
+    except Exception:
+        pass
     conn.commit()
     cur.execute('SELECT * FROM tasks WHERE id=?', (task_id,))
     r = cur.fetchone(); conn.close()

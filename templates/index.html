@@ -58,12 +58,32 @@
 <body>
 
 <div class="app">
-    <header class="top">
+    <div class="brand-top">
+        <div class="brand-title">Tasks Pro</div>
+        <div class="search"><input id="global-search" placeholder="Tìm kiếm..." style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.12)"></div>
+        <div class="controls"><button class="btn outline">Thêm</button></div>
+    </div>
+
+    <div class="left-nav" aria-hidden="false">
+        <button title="Dashboard"><i class="fa fa-th-large"></i></button>
+        <button title="Tasks"><i class="fa fa-list"></i></button>
+        <button title="Calendar"><i class="fa fa-calendar"></i></button>
+        <button title="Reports"><i class="fa fa-chart-bar"></i></button>
+        <button title="Settings"><i class="fa fa-cog"></i></button>
+        <div style="flex:1"></div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+            <div class="avatar-small" title="Phan Minh Nhi" style="background:linear-gradient(90deg,#6366f1,#06b6d4);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">PN</div>
+            <div class="avatar-small" title="Võ Văn Quang" style="background:linear-gradient(90deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">VQ</div>
+        </div>
+    </div>
+
+    <header class="top" style="margin-left:100px">
         <div>
-            <h1>Tasks Pro</h1>
+            <h1 style="margin:0">Tasks Pro</h1>
             <div class="muted">Hiện đại • Nhanh • Riêng tư</div>
         </div>
         <div class="controls">
+            <button id="view-toggle" class="btn outline">Board</button>
             {% if username %}
                 <div class="muted">Xin chào, <strong>{{ username }}</strong></div>
                 <form method="post" action="/api/logout" style="display:inline"><button class="btn ghost">Đăng xuất</button></form>
@@ -79,6 +99,9 @@
             <form id="addForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                 <input style="flex:1" type="text" name="title" placeholder="Tiêu đề công việc" required>
                 <input type="text" name="category" placeholder="Phân loại">
+                <input type="text" name="assignee" id="assignee-name" placeholder="Người phụ trách (tên)">
+                <input type="file" id="assignee-file" accept="image/*" style="width:120px">
+                <button id="upload-avatar" type="button" class="btn outline" style="background:transparent;color:var(--accent1);border:1px solid rgba(124,92,255,0.08)">Tải avatar</button>
                 <input type="text" name="tags" placeholder="Thẻ (phân cách bằng dấu phẩy)">
                 <input type="date" name="deadline">
                 <select name="priority"><option value="high">Cao</option><option value="medium" selected>Trung bình</option><option value="low">Thấp</option></select>
@@ -128,6 +151,23 @@
             </div>
         </aside>
     </main>
+
+    <!-- BOARD VIEW -->
+    <section id="board-view" class="board-view" style="display:none;margin-top:18px">
+        <div class="board-shell">
+            <aside class="sidebar">
+                <div class="logo">Tasks Pro</div>
+                <nav class="side-nav">
+                    <button class="side-item active" data-filter="all">Tất cả</button>
+                    <button class="side-item" data-filter="Work">Work</button>
+                    <button class="side-item" data-filter="Personal">Personal</button>
+                    <button class="side-item" data-filter="Sales">Sales</button>
+                    <button class="side-item" data-filter="">Thêm bộ lọc</button>
+                </nav>
+            </aside>
+            <div class="board" id="board"></div>
+        </div>
+    </section>
 </div>
 
 <link rel="stylesheet" href="/static/styles.css">
