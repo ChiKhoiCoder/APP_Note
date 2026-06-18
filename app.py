@@ -77,6 +77,16 @@ def init_db():
             conn.close()
         except Exception:
             pass
+    # ensure tags column exists
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("ALTER TABLE tasks ADD COLUMN tags TEXT DEFAULT ''")
+        conn.commit(); conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.on_event('startup')
 def startup_event():
@@ -250,7 +260,7 @@ def api_logout(response: Response):
 
 # --- Task APIs ---
 @app.get("/api/tasks")
-def api_list_tasks(request: Request, q: Optional[str] = None, status: Optional[str] = None, priority: Optional[str] = None):
+def api_list_tasks(request: Request, q: Optional[str] = None, status: Optional[str] = None, priority: Optional[str] = None, tag: Optional[str] = None):
     username = request.cookies.get("session")
     if username:
         username = _verify_session_cookie(username)
@@ -258,14 +268,17 @@ def api_list_tasks(request: Request, q: Optional[str] = None, status: Optional[s
         return JSONResponse({"tasks": []})
     conn = get_db()
     cur = conn.cursor()
-    cur.execute('SELECT * FROM tasks WHERE username=? ORDER BY position ASC', (username,))
+    if tag:
+        cur.execute('SELECT * FROM tasks WHERE username=? AND tags LIKE ? ORDER BY position ASC', (username, f'%{tag}%'))
+    else:
+        cur.execute('SELECT * FROM tasks WHERE username=? ORDER BY position ASC', (username,))
     rows = cur.fetchall()
     conn.close()
     tasks = []
     for r in rows:
         tasks.append({
             'id': r['id'], 'title': r['title'], 'completed': bool(r['completed']), 'created': r['created'],
-            'deadline': r['deadline'], 'category': r['category'], 'priority': r['priority']
+            'deadline': r['deadline'], 'category': r['category'], 'priority': r['priority'], 'tags': r['tags'] if 'tags' in r.keys() else ''
         })
     res = tasks
     if q:
@@ -277,6 +290,58 @@ def api_list_tasks(request: Request, q: Optional[str] = None, status: Optional[s
     if priority:
         res = [t for t in res if t.get('priority') == priority]
     return JSONResponse({"tasks": res})
+
+
+@app.get('/api/stats/full')
+def api_stats_full(request: Request, days: int = 14):
+    # returns overall counts plus a simple time-series for the last `days`
+    session = request.cookies.get('session')
+    if session:
+        username = _verify_session_cookie(session)
+    else:
+        username = None
+    if not username:
+        return JSONResponse({'total': 0, 'completed': 0, 'percent': 0, 'trend': []})
+    conn = get_db(); cur = conn.cursor()
+    cur.execute('SELECT COUNT(*) as c, SUM(completed) as s FROM tasks WHERE username=?', (username,))
+    row = cur.fetchone()
+    total = row['c'] or 0
+    completed = row['s'] or 0
+    percent = int((completed/total*100) if total else 0)
+
+    # build daily trend (created count per day)
+    trend = []
+    now = datetime.datetime.utcnow()
+    for i in range(days-1, -1, -1):
+        d = (now - datetime.timedelta(days=i)).date().isoformat()
+        cur.execute("SELECT COUNT(*) as c, SUM(completed) as s FROM tasks WHERE username=? AND date(created)=?", (username, d))
+        r = cur.fetchone()
+        trend.append({'date': d, 'created': r['c'] or 0, 'completed': r['s'] or 0})
+    conn.close()
+    return JSONResponse({'total': total, 'completed': completed, 'percent': percent, 'trend': trend})
+
+
+@app.get('/api/tasks/export')
+def api_tasks_export(request: Request):
+    session = request.cookies.get('session')
+    if session:
+        username = _verify_session_cookie(session)
+    else:
+        username = None
+    if not username:
+        raise HTTPException(status_code=401)
+    conn = get_db(); cur = conn.cursor()
+    cur.execute('SELECT id,title,completed,created,deadline,category,priority,tags FROM tasks WHERE username=? ORDER BY position ASC', (username,))
+    rows = cur.fetchall(); conn.close()
+    # build CSV
+    import io, csv
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['id','title','completed','created','deadline','category','priority','tags'])
+    for r in rows:
+        writer.writerow([r['id'], r['title'], int(r['completed']), r['created'] or '', r['deadline'] or '', r['category'] or '', r['priority'] or '', r['tags'] or ''])
+    csv_data = out.getvalue(); out.close()
+    return Response(content=csv_data, media_type='text/csv')
 
 
 @app.get('/api/reminders')
@@ -395,7 +460,7 @@ def api_chat_history(request: Request, limit: int = 50):
     return JSONResponse({'messages': msgs})
 
 @app.post("/api/tasks")
-def api_create_task(request: Request, title: str = Form(...), category: str = Form(""), deadline: str = Form(""), priority: str = Form("medium")):
+def api_create_task(request: Request, title: str = Form(...), category: str = Form(""), deadline: str = Form(""), priority: str = Form("medium"), tags: str = Form("")):
     username = request.cookies.get('session')
     if username:
         username = _verify_session_cookie(username)
@@ -411,15 +476,15 @@ def api_create_task(request: Request, title: str = Form(...), category: str = Fo
         pos = int(mx) + 1
     except Exception:
         pos = 0
-    cur.execute('INSERT INTO tasks(id,username,title,completed,created,deadline,category,priority,position) VALUES(?,?,?,?,?,?,?,?,?)',
-                (tid, username, title, 0, _now_iso(), deadline, category, priority, pos))
+    cur.execute('INSERT INTO tasks(id,username,title,completed,created,deadline,category,priority,position,tags) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (tid, username, title, 0, _now_iso(), deadline, category, priority, pos, tags))
     conn.commit()
     conn.close()
-    task = {"id": tid, "title": title, "completed": False, "created": _now_iso(), "deadline": deadline, "category": category, "priority": priority}
+    task = {"id": tid, "title": title, "completed": False, "created": _now_iso(), "deadline": deadline, "category": category, "priority": priority, 'tags': tags}
     return JSONResponse({"task": task})
 
 @app.put("/api/tasks/{task_id}")
-def api_update_task(request: Request, task_id: str, title: Optional[str] = Form(None), deadline: Optional[str] = Form(None), category: Optional[str] = Form(None), priority: Optional[str] = Form(None)):
+def api_update_task(request: Request, task_id: str, title: Optional[str] = Form(None), deadline: Optional[str] = Form(None), category: Optional[str] = Form(None), priority: Optional[str] = Form(None), tags: Optional[str] = Form(None)):
     username = request.cookies.get('session')
     if username:
         username = _verify_session_cookie(username)
@@ -440,13 +505,15 @@ def api_update_task(request: Request, task_id: str, title: Optional[str] = Form(
         updates.append('category=?'); params.append(category)
     if priority is not None:
         updates.append('priority=?'); params.append(priority)
+    if tags is not None:
+        updates.append('tags=?'); params.append(tags)
     if updates:
         params.extend([task_id, username])
         cur.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id=? AND username=?", params)
         conn.commit()
     cur.execute('SELECT * FROM tasks WHERE id=?', (task_id,))
     r = cur.fetchone(); conn.close()
-    return JSONResponse({"task": {"id": r['id'], "title": r['title'], "completed": bool(r['completed']), "created": r['created'], "deadline": r['deadline'], "category": r['category'], "priority": r['priority']}})
+    return JSONResponse({"task": {"id": r['id'], "title": r['title'], "completed": bool(r['completed']), "created": r['created'], "deadline": r['deadline'], "category": r['category'], "priority": r['priority'], "tags": r.get('tags') if isinstance(r, sqlite3.Row) else r['tags']}})
 
 @app.post("/api/tasks/{task_id}/toggle")
 def api_toggle_task(task_id: str, request: Request):

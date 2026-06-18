@@ -79,15 +79,19 @@
             <form id="addForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                 <input style="flex:1" type="text" name="title" placeholder="Tiêu đề công việc" required>
                 <input type="text" name="category" placeholder="Phân loại">
+                <input type="text" name="tags" placeholder="Thẻ (phân cách bằng dấu phẩy)">
                 <input type="date" name="deadline">
                 <select name="priority"><option value="high">Cao</option><option value="medium" selected>Trung bình</option><option value="low">Thấp</option></select>
                 <button class="btn" type="submit">Thêm</button>
+                <button id="add-samples" type="button" class="btn outline" style="background:transparent;color:var(--accent1);border:1px solid rgba(124,92,255,0.08)">Thêm 5 mẫu</button>
             </form>
 
             <div class="controls" style="margin-top:12px">
                 <input id="search" type="text" placeholder="Tìm kiếm..." style="flex:1">
                 <select id="filter"><option value="">Tất cả</option><option value="todo">Chưa xong</option><option value="done">Đã xong</option></select>
                 <select id="priority"><option value="">Tất cả ưu tiên</option><option value="high">Cao</option><option value="medium">Trung bình</option><option value="low">Thấp</option></select>
+                <input id="filter-tag" type="text" placeholder="Lọc theo thẻ" style="width:150px;padding:8px;border-radius:8px;border:1px solid #e6edf3">
+                <button id="export-csv" class="btn outline" style="background:transparent;color:var(--muted);border:1px solid rgba(0,0,0,0.06)">Tải CSV</button>
                 <label style="display:flex;align-items:center;gap:6px;margin-left:6px"><input id="select-all" type="checkbox"> Chọn tất cả</label>
                 <button id="complete-selected" class="btn outline" style="background:transparent;color:var(--accent1);border:1px solid rgba(124,92,255,0.08)">Hoàn tất</button>
                 <button id="delete-selected" class="btn outline" style="background:transparent;color:#ff4d6d;border:1px solid rgba(255,77,109,0.08)">Xóa</button>
@@ -108,6 +112,10 @@
                         <div style="flex:1"><strong id="percent">0%</strong><div class="muted">Tỷ lệ</div></div>
                     </div>
                     <canvas id="statsChart" width="300" height="180" style="margin-top:12px;max-width:100%"></canvas>
+                    <div style="margin-top:12px">
+                        <h4 style="margin:8px 0 6px 0">Xu hướng 14 ngày</h4>
+                        <canvas id="trendChart" width="300" height="120" style="max-width:100%"></canvas>
+                    </div>
                 </div>
 
             <div class="card">

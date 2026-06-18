@@ -2,7 +2,7 @@ async function qs(sel){return document.querySelector(sel)}
 async function qsa(sel){return Array.from(document.querySelectorAll(sel))}
 
 const api = {
-  getTasks: (q,status,priority)=> fetch(`/api/tasks?q=${encodeURIComponent(q||"")}&status=${status||""}&priority=${priority||""}`).then(r=>r.json()),
+  getTasks: (q,status,priority, tag)=> fetch(`/api/tasks?q=${encodeURIComponent(q||"")}&status=${status||""}&priority=${priority||""}&tag=${encodeURIComponent(tag||"")}`).then(r=>r.json()),
   create: (form)=> fetch('/api/tasks',{method:'POST',body: form}).then(r=>r.json()),
   toggle: id=> fetch(`/api/tasks/${id}/toggle`,{method:'POST'}).then(r=>r.json()),
   del: id=> fetch(`/api/tasks/${id}`,{method:'DELETE'}).then(r=>r.json()),
@@ -52,30 +52,34 @@ function renderTasks(tasks){
     left.innerHTML = `<div><input type=checkbox ${t.completed? 'checked':''} data-id='${t.id}' class='check'> <strong>${escapeHtml(t.title)}</strong></div><div class='meta'>${t.category||''} • ${t.created.slice(0,10)} ${t.deadline? '• due '+t.deadline.split('T')[0]:''}</div>`;
     const right=document.createElement('div'); right.className='right';
     const pri=document.createElement('div'); pri.className='badge '+(t.priority=='high'?'pri-high':t.priority=='low'?'pri-low':'pri-med'); pri.textContent = t.priority[0].toUpperCase()+t.priority.slice(1);
-    const del=document.createElement('button'); del.textContent='Xóa'; del.className='btn'; del.onclick=async ()=>{
-      if(!confirm('Xóa?')) return;
-      // save last deleted for undo
-      try{ localStorage.setItem('lastDeleted', JSON.stringify(t)); }catch(e){}
-      try{
-        const res = await api.del(t.id);
-        if(res && res.ok){
-          toast('Đã xóa', 'warn', 'Hoàn tác', async ()=>{
-            try{
-              const f = new FormData(); f.append('title', t.title); f.append('category', t.category||''); f.append('deadline', t.deadline||''); f.append('priority', t.priority||'medium');
-              const r = await api.create(f);
-              if(r && r.task) toast('Hoàn tác thành công', 'success');
-              load();
-            }catch(e){ toast('Hoàn tác thất bại') }
-          });
-        } else { toast('Xóa thất bại') }
-      }catch(e){ toast('Xóa thất bại') }
-      load();
-    };
+        const del=document.createElement('button'); del.textContent='Xóa'; del.className='btn'; del.onclick=async ()=>{
+          if(!confirm('Xóa?')) return;
+          try{ localStorage.setItem('lastDeleted', JSON.stringify(t)); }catch(e){}
+          try{
+            const res = await api.del(t.id);
+            if(res && res.ok){
+              // animate removal
+              const elNode = document.querySelector('.task[data-id="'+t.id+'"]');
+              if(elNode){ elNode.classList.add('leave'); setTimeout(()=> load(), 320); }
+              else { load(); }
+              toast('Đã xóa', 'warn', 'Hoàn tác', async ()=>{
+                try{
+                  const f = new FormData(); f.append('title', t.title); f.append('category', t.category||''); f.append('deadline', t.deadline||''); f.append('priority', t.priority||'medium');
+                  const r = await api.create(f);
+                  if(r && r.task) toast('Hoàn tác thành công', 'success');
+                  load();
+                }catch(e){ toast('Hoàn tác thất bại') }
+              });
+            } else { toast('Xóa thất bại') }
+          }catch(e){ toast('Xóa thất bại') }
+        };
     const edit=document.createElement('button'); edit.textContent='Sửa'; edit.className='btn'; edit.onclick=async ()=>{ const n=prompt('Sửa tiêu đề', t.title); if(n) { try{ const f=new FormData(); f.append('title',n); await fetch(`/api/tasks/${t.id}`,{method:'PUT',body:f}); toast('Đã cập nhật', 'success'); }catch(e){ toast('Cập nhật thất bại') } load(); } };
     right.appendChild(pri); right.appendChild(edit); right.appendChild(del);
     left.prepend(handle);
     el.appendChild(left); el.appendChild(right);
+    el.classList.add('enter');
     list.appendChild(el);
+    requestAnimationFrame(()=>{ el.classList.remove('enter'); });
   });
   qsa('.check').then(arr=>arr.forEach(cb=>cb.addEventListener('change',e=>{ api.toggle(e.target.dataset.id).then(()=>{ toast('Đã cập nhật trạng thái'); load(); }).catch(()=>{ toast('Cập nhật thất bại') }) })));
 
@@ -109,13 +113,30 @@ async function load(){
   const q=document.getElementById('search').value;
   const status=document.getElementById('filter').value;
   const priority=document.getElementById('priority').value;
-  const data=await api.getTasks(q,status,priority);
+  const tag = document.getElementById('filter-tag') ? document.getElementById('filter-tag').value.trim() : '';
+  const data=await api.getTasks(q,status,priority, tag);
   renderTasks(data.tasks);
   const st = await api.stats();
+  // basic stat summary
   document.getElementById('stat').textContent = `${st.total} việc — ${st.completed} xong — ${st.percent}%`;
   document.getElementById('total').textContent = st.total;
   document.getElementById('done').textContent = st.completed;
   document.getElementById('percent').textContent = st.percent + '%';
+  // fetch extended stats for charts (trend + breakdown)
+  try{
+    const full = await fetch('/api/stats/full?days=14').then(r=>r.json());
+    const trend = full.trend || [];
+    const labels = trend.map(t=> t.date.slice(5));
+    const created = trend.map(t=> t.created);
+    const completed = trend.map(t=> t.completed);
+    // render small line chart for trend
+    await ensureChartLib();
+    const trendCanvas = document.getElementById('trendChart');
+    if(trendCanvas){
+      if(window.trendChart) { window.trendChart.data.labels = labels; window.trendChart.data.datasets[0].data = created; window.trendChart.data.datasets[1].data = completed; window.trendChart.update(); }
+      else{ window.trendChart = new Chart(trendCanvas.getContext('2d'), { type: 'line', data: { labels, datasets: [ { label: 'Tạo', data: created, borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,0.08)', tension:0.35 }, { label: 'Hoàn thành', data: completed, borderColor:'#10b981', backgroundColor:'rgba(16,185,129,0.06)', tension:0.35 } ] }, options:{plugins:{legend:{display:true,position:'bottom'}}, scales:{x:{display:true}, y:{display:true}} } }); }
+    }
+  }catch(e){ console.warn('full stats failed', e) }
   // update chart
   try{
     await ensureChartLib();
@@ -174,6 +195,16 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('search').addEventListener('input', debouncedLoad);
   document.getElementById('filter').addEventListener('change', load);
   document.getElementById('priority').addEventListener('change', load);
+  const tagFilter = document.getElementById('filter-tag'); if(tagFilter){ tagFilter.addEventListener('input', debounce(load, 300)); }
+  const exportBtn = document.getElementById('export-csv'); if(exportBtn){ exportBtn.addEventListener('click', async ()=>{
+    try{
+      const res = await fetch('/api/tasks/export');
+      if(!res.ok) return toast('Không thể xuất CSV');
+      const blob = await res.blob(); const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'tasks_export.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      toast('Đã tải CSV');
+    }catch(e){ toast('Lỗi khi tải CSV') }
+  }); }
   // select-all checkbox for bulk actions
   const selAll = document.getElementById('select-all');
   if(selAll){ selAll.addEventListener('change', ()=>{
@@ -202,6 +233,32 @@ document.addEventListener('DOMContentLoaded',()=>{
     }
   });
   load();
+});
+
+// add 5 sample tasks helper
+document.addEventListener('DOMContentLoaded', ()=>{
+  const btn = document.getElementById('add-samples');
+  if(!btn) return;
+  btn.addEventListener('click', async ()=>{
+    const samples = [
+      {title: 'Review PR #42', category: 'Work', deadline: new Date(Date.now()+2*24*60*60*1000).toISOString().slice(0,10), priority: 'high', tags: 'sample,work'},
+      {title: 'Prepare slides cho họp', category: 'Work', deadline: new Date(Date.now()+3*24*60*60*1000).toISOString().slice(0,10), priority: 'medium', tags: 'sample,presentation'},
+      {title: 'Mua sắm đồ dùng', category: 'Personal', deadline: '', priority: 'low', tags: 'sample,personal'},
+      {title: 'Hoàn thiện báo cáo', category: 'Work', deadline: new Date(Date.now()+1*24*60*60*1000).toISOString().slice(0,10), priority: 'high', tags: 'sample,urgent'},
+      {title: 'Gọi điện cho khách hàng', category: 'Sales', deadline: new Date(Date.now()+4*24*60*60*1000).toISOString().slice(0,10), priority: 'medium', tags: 'sample,call'}
+    ];
+    btn.disabled = true; btn.textContent = 'Đang thêm...';
+    try{
+      for(const s of samples){
+        const f = new FormData(); f.append('title', s.title); f.append('category', s.category); f.append('deadline', s.deadline); f.append('priority', s.priority); f.append('tags', s.tags);
+        try{ await api.create(f); }catch(e){ console.warn('sample create failed', e) }
+        await new Promise(r=>setTimeout(r,120));
+      }
+      toast('Đã thêm 5 mẫu', 'success');
+      load();
+    }catch(e){ toast('Không thể thêm mẫu') }
+    btn.disabled = false; btn.textContent = 'Thêm 5 mẫu';
+  });
 });
 
 // beep using WebAudio
